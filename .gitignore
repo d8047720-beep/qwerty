@@ -1,0 +1,16 @@
+# Ignore
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite
+*.sqlite3
+bot.db
+.venv/
+.idea/
+.vscode/
+pytest_cache/
+.pytest_cache/
+*.log
+.DS_Store
