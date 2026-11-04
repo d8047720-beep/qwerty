@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import time
 from datetime import timedelta
 
 import aiosqlite
@@ -146,15 +145,6 @@ async def user_submit(m: Message, bot: Bot):
     if not (m.text or m.photo or m.video or m.animation or m.document):
         return await m.answer("Поддерживаются текст, фото, видео, gif и файлы.")
 
-    # КД 1 час на пользователя (отключён для тестов)
-    # last = float(await get_setting(f"cooldown_{uid}", 0))
-    # if time.time() - last < 3600:
-    #     remaining = int(3600 - (time.time() - last))
-    #     return await m.answer(
-    #         f"⏳ Следующий пост можно отправить через {remaining // 60} мин {remaining % 60} сек.\n"
-    #         f"Канал: {CHANNEL_LINK}"
-    #     )
-
     v = await moderate(text_of(m))
     if v:
         n = await add_warn(uid, 0)
@@ -165,7 +155,6 @@ async def user_submit(m: Message, bot: Bot):
             f"Деталь: {v.detail}\n{extra}\nКанал: {CHANNEL_LINK}"
         )
 
-    # await set_setting(f"cooldown_{uid}", time.time())
     qid = await enqueue(m.chat.id, m.message_id, uid, "pending")
 
     has_media = bool(m.photo or m.video or m.animation or m.document)
