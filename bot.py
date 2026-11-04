@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from datetime import timedelta
 
 import aiosqlite
@@ -139,6 +140,12 @@ async def user_submit(m: Message, bot: Bot):
     if not (m.text or m.photo or m.video or m.animation or m.document):
         return await m.answer("Поддерживаются текст, фото, видео, gif и файлы.")
 
+    # КД 1 час на пользователя
+    last = float(await get_setting(f"cooldown_{uid}", 0))
+    if time.time() - last < 3600:
+        remaining = int(3600 - (time.time() - last))
+        return await m.answer(f"⏳ Следующий пост можно отправить через {remaining // 60} мин {remaining % 60} сек.")
+
     v = await moderate(text_of(m))
     if v:
         n = await add_warn(uid, 0)
@@ -146,12 +153,9 @@ async def user_submit(m: Message, bot: Bot):
         extra = "Вы заблокированы." if left <= 0 else f"Осталось попыток: {left}."
         return await m.answer(f"⛔ Пост отклонён автомодерацией: {v.label}.\n{extra}")
 
-    if AUTO_APPROVE:
-        qid = await enqueue(m.chat.id, m.message_id, uid, "approved")
-        ok = await publish_message(bot, m.chat.id, m.message_id, qid)
-        return await m.answer("✅ Опубликовано в канал ✅" if ok else f"✅ Принято (#{qid}), но ошибка публикации")
-
+    await set_setting(f"cooldown_{uid}", time.time())
     qid = await enqueue(m.chat.id, m.message_id, uid, "pending")
+
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Одобрить", callback_data=f"ok:{qid}"),
         InlineKeyboardButton(text="❌ Отклонить", callback_data=f"no:{qid}"),
@@ -161,7 +165,13 @@ async def user_submit(m: Message, bot: Bot):
             await bot.copy_message(admin, m.chat.id, m.message_id, reply_markup=kb)
         except TelegramAPIError:
             logging.warning("Не удалось отправить админу %s", admin)
-    await m.answer("📨 Пост отправлен на проверку.")
+
+    if AUTO_APPROVE:
+        await set_status(qid, "approved")
+        asyncio.create_task(delayed_publish(bot, m.chat.id, m.message_id, qid, 600))
+        await m.answer("🕐 Пост на модерации. Опубликуем автоматически через 10 мин, если администратор не отклонит.")
+    else:
+        await m.answer("📋 Пост отправлен на модерацию. Администратор решит, публиковать ли его.")
 
 
 @router.callback_query(F.data.regexp(r"^(ok|no):\d+$"), F.from_user.id.in_(ADMIN_IDS))
@@ -258,6 +268,15 @@ async def publish_message(bot: Bot, chat_id: int, msg_id: int, qid: int) -> bool
         logging.error("Ошибка публикации #%s: %s", qid, e)
         await set_status(qid, "failed")
         return False
+
+
+async def delayed_publish(bot: Bot, chat_id: int, msg_id: int, qid: int, delay: int):
+    await asyncio.sleep(delay)
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT status FROM queue WHERE id=?", (qid,))
+        row = await cur.fetchone()
+    if row and row[0] == "approved":
+        await publish_message(bot, chat_id, msg_id, qid)
 
 
 async def publish_next(bot: Bot) -> bool:
