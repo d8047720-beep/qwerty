@@ -273,13 +273,43 @@ CATEGORIES: list[dict] = [
         "patterns": [
             r"\bсигарет\w*\b", r"\bсигару\w*\b", r"\bсигары\b",
             r"\bпод\s*(?:систем\w*)?\b", r"\bподик\w*\b", r"\bпод-систем\w*\b",
-            r"\bжижа\w*\b", r"\bжиж\w*\b",
+            r"\bжижа\w*\b", r"\bжиж\w*\b", r"\bzhizhu\b", r"\bzhizha\b",
             r"\bвейп\w*\b", r"\bвэйп\w*\b", r"\bвейпинг\b",
             r"\biqos\b", r"\b glo \b", r"\bэлектронн\w*\s+сигарет\w*\b",
             r"\bкальян\w*\b", r"\bтабак\w*\b", r"\bнюха\w*\b",
+            r"\bsalt\w*\s+ник\w*\b", r"\bsolnik\b", r"\bsol nik\b",
         ],
     },
 ]
+
+_MEANINGLESS_RE = re.compile(r"^[^\wа-яА-Яa-zA-Z]*$")
+_RANDOM_LETTERS_RE = re.compile(r"^[а-яa-z]{2,20}$", re.I)
+_KEYBOARD_PATTERNS = (
+    "qwerty", "qwertyu", "asdfgh", "asdfghj", "zxcvbn", "zxcvbnm",
+    "йцукен", "йцукенг", "фывапр", "фывапрол", "ячсмить",
+    "abcdef", "abcdefg", "123456", "1234567", "qqqqqq", "wwwwww",
+    "aaaaaa", "bbbbbb", "cccccc", "dddddd",
+)
+
+
+def _check_meaningless(text: str) -> Violation | None:
+    t = text.strip()
+    if not t:
+        return None
+    # только знаки препинания / точки / пробелы
+    if _MEANINGLESS_RE.match(t) and len(t) > 0:
+        return Violation("meaningless", "бессмысленное сообщение (только знаки)", t)
+    # одна буква / цифра
+    if len(t) == 1:
+        return Violation("meaningless", "бессмысленное сообщение (один символ)", t)
+    # короткая случайная последовательность букв (набор с клавиатуры)
+    low = t.lower()
+    if _RANDOM_LETTERS_RE.match(low) and low in _KEYBOARD_PATTERNS:
+        return Violation("meaningless", "бессмысленное сообщение (набор букв)", t)
+    # повтор одного символа 3+ раза
+    if len(set(t.replace(" ", ""))) == 1 and len(t.replace(" ", "")) >= 3:
+        return Violation("meaningless", "бессмысленное сообщение (повтор символа)", t)
+    return None
 
 
 @dataclass
@@ -429,6 +459,10 @@ def _check_rules(text: str) -> Violation | None:
                 m = pat.search(flat)
                 if m:
                     return hit(m.group(0))
+
+    v = _check_meaningless(text)
+    if v:
+        return v
 
     v = _link_violation(text)
     if v:
