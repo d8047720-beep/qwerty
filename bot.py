@@ -22,6 +22,8 @@ AUTO_APPROVE = os.getenv("AUTO_APPROVE", "0") == "1"
 MAX_WARNS = int(os.getenv("MAX_WARNS", "3"))
 MUTE_MINUTES = int(os.getenv("MUTE_MINUTES", "60"))
 DB = os.getenv("DB_PATH", "bot.db")
+CHANNEL_RAW = str(CHANNEL_ID).lstrip("-100").lstrip("@")
+CHANNEL_LINK = f"https://t.me/{CHANNEL_RAW}"
 
 router = Router()
 
@@ -99,9 +101,12 @@ async def moderate(text: str):
 # ---------------- Приватный чат: предложка ----------------
 @router.message(CommandStart(), F.chat.type == "private")
 async def start(m: Message):
-    await m.answer("Привет! Пришли текст, фото или видео — я проверю и, если всё ок, "
-                   "отправлю на публикацию в канал.\n\nНельзя: оскорбления, расизм, угрозы, "
-                   "18+, наркотики, спам и ссылки.")
+    await m.answer(
+        f"Привет! Пришли текст, фото или видео — я проверю и, если всё ок, "
+        f"отправлю на публикацию в канал.\n\n"
+        f"Нельзя: оскорбления, расизм, угрозы, 18+, наркотики, спам и ссылки.\n"
+        f"Канал: {CHANNEL_LINK}"
+    )
 
 
 @router.message(Command("queue"), F.from_user.id.in_(ADMIN_IDS))
@@ -112,7 +117,8 @@ async def cmd_queue(m: Message):
             cur = await db.execute("SELECT COUNT(*) FROM queue WHERE status=?", (s,))
             res[s] = (await cur.fetchone())[0]
     await m.answer(f"На проверке: {res['pending']}\nГотово к публикации: {res['approved']}\n"
-                   f"Опубликовано: {res['posted']}\nОтклонено: {res['rejected']}")
+                   f"Опубликовано: {res['posted']}\nОтклонено: {res['rejected']}\n"
+                   f"Канал: {CHANNEL_LINK}")
 
 
 @router.message(Command("post_now"), F.from_user.id.in_(ADMIN_IDS))
@@ -126,10 +132,10 @@ async def admin_post(m: Message, bot: Bot):
     """Всё, что присылает админ, сразу проходит модерацию и публикуется в канал."""
     v = await moderate(text_of(m))
     if v:
-        return await m.answer(f"⛔ Не принято: {v.label} ({v.detail})")
+        return await m.answer(f"⛔ Не принято: {v.label} ({v.detail})\nКанал: {CHANNEL_LINK}")
     qid = await enqueue(m.chat.id, m.message_id, m.from_user.id, "approved")
     ok = await publish_message(bot, m.chat.id, m.message_id, qid)
-    await m.answer("✅ Опубликовано в канал ✅" if ok else f"✅ Принято (#{qid}), но ошибка публикации")
+    await m.answer(f"✅ Опубликовано в канал ✅\nКанал: {CHANNEL_LINK}" if ok else f"✅ Принято (#{qid}), но ошибка публикации\nКанал: {CHANNEL_LINK}")
 
 
 @router.message(F.chat.type == "private", ~F.text.startswith("/"))
@@ -144,17 +150,25 @@ async def user_submit(m: Message, bot: Bot):
     last = float(await get_setting(f"cooldown_{uid}", 0))
     if time.time() - last < 3600:
         remaining = int(3600 - (time.time() - last))
-        return await m.answer(f"⏳ Следующий пост можно отправить через {remaining // 60} мин {remaining % 60} сек.")
+        return await m.answer(
+            f"⏳ Следующий пост можно отправить через {remaining // 60} мин {remaining % 60} сек.\n"
+            f"Канал: {CHANNEL_LINK}"
+        )
 
     v = await moderate(text_of(m))
     if v:
         n = await add_warn(uid, 0)
         left = MAX_WARNS - n
         extra = "Вы заблокированы." if left <= 0 else f"Осталось попыток: {left}."
-        return await m.answer(f"⛔ Пост отклонён автомодерацией: {v.label}.\n{extra}")
+        return await m.answer(
+            f"⛔ Пост отклонён автомодерацией: {v.label}.\n"
+            f"Деталь: {v.detail}\n{extra}\nКанал: {CHANNEL_LINK}"
+        )
 
     await set_setting(f"cooldown_{uid}", time.time())
     qid = await enqueue(m.chat.id, m.message_id, uid, "pending")
+
+    has_media = bool(m.photo or m.video or m.animation or m.document)
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Одобрить", callback_data=f"ok:{qid}"),
@@ -166,12 +180,19 @@ async def user_submit(m: Message, bot: Bot):
         except TelegramAPIError:
             logging.warning("Не удалось отправить админу %s", admin)
 
-    if AUTO_APPROVE:
+    media_note = " (медиа — проверяет админ вручную)" if has_media else ""
+    if AUTO_APPROVE and not has_media:
         await set_status(qid, "approved")
         asyncio.create_task(delayed_publish(bot, m.chat.id, m.message_id, qid, 600))
-        await m.answer("🕐 Пост на модерации. Опубликуем автоматически через 10 мин, если администратор не отклонит.")
+        await m.answer(
+            f"🕐 Пост на модерации. Опубликуем автоматически через 10 мин{media_note}, "
+            f"если администратор не отклонит.\nКанал: {CHANNEL_LINK}"
+        )
     else:
-        await m.answer("📋 Пост отправлен на модерацию. Администратор решит, публиковать ли его.")
+        await m.answer(
+            f"📋 Пост отправлен на модерацию{media_note}. "
+            f"Администратор решит, публиковать ли его.\nКанал: {CHANNEL_LINK}"
+        )
 
 
 @router.callback_query(F.data.regexp(r"^(ok|no):\d+$"), F.from_user.id.in_(ADMIN_IDS))
@@ -200,7 +221,7 @@ async def review(c: CallbackQuery, bot: Bot):
     await c.message.edit_reply_markup(reply_markup=None)
     await c.message.reply(note)
     try:
-        await bot.send_message(user_id, f"Ваш пост #{qid}: {note}")
+        await bot.send_message(user_id, f"Ваш пост #{qid}: {note}\nКанал: {CHANNEL_LINK}")
     except TelegramAPIError:
         pass
     await c.answer()
